@@ -1,7 +1,7 @@
 name: 药丸论坛签到
 
 on:
-  # 定时触发（每天9点执行，使用UTC时间，北京时间需要+8小时，所以设置为1点）
+  # 定时触发（每天9点执行，UTC时间1点 = 北京时间9点）
   schedule:
     - cron: '0 1 * * *'
   # 手动触发
@@ -10,6 +10,9 @@ on:
 jobs:
   checkin:
     runs-on: ubuntu-latest
+    outputs:
+      checkin_result: ${{ steps.checkin_step.outputs.checkin_result }}
+      checkin_msg: ${{ steps.checkin_step.outputs.checkin_msg }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -25,20 +28,22 @@ jobs:
           pip install requests
       
       - name: 执行签到脚本
+        id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
         run: python checkin.py
       
-      - name: 发送通知（可选）
-        if: failure()
+      - name: 发送签到结果邮件
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.qq.com
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: 药丸论坛签到失败通知
-          body: 药丸论坛签到任务执行失败，请检查Cookie是否有效
+          subject: 药丸论坛签到通知 - ${{ steps.checkin_step.outputs.checkin_result }}
+          body: |
+            药丸论坛签到任务执行结果：
+            ${{ steps.checkin_step.outputs.checkin_msg }}
           to: ${{ secrets.NOTIFY_EMAIL }}
           from: GitHub Actions
           secure: true
