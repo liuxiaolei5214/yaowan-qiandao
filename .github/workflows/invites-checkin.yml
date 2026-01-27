@@ -1,15 +1,16 @@
 name: 药丸论坛签到
 
 on:
-  # 定时触发（UTC 1点30分 = 北京时间9点30分，非整点避免高峰）
   schedule:
-    - cron: '30 1 * * *'
-  # 手动触发
+    - cron: '0 1 * * *'  # UTC 1点30分 = 北京时间9点30分
   workflow_dispatch:
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write  # 必须授予该权限，才能更新 Secret
     outputs:
       checkin_result: ${{ steps.checkin_step.outputs.checkin_result }}
       checkin_msg: ${{ steps.checkin_step.outputs.checkin_msg }}
@@ -22,12 +23,12 @@ jobs:
         with:
           python-version: '3.10'
       
-      - name: 安装依赖
+      - name: 安装依赖（含加密库）
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests cryptography  # 新增 cryptography 用于加密 Secret
       
-      - name: 记录触发时间（验证定时任务）
+      - name: 记录触发时间
         run: |
           echo "定时任务触发成功，当前时间（UTC）：$(date -u)"
           echo "当前时间（北京时间）：$(date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')"
@@ -36,9 +37,13 @@ jobs:
         id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
+          INVITES_USERNAME: ${{ secrets.INVITES_USERNAME }}  # 新增：用户名 Secret
+          INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}  # 新增：密码 Secret
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 内置 Token，无需手动配置
+          GITHUB_REPOSITORY: ${{ github.repository }}  # 内置仓库信息，无需手动配置
         run: python checkin.py
       
-      # ---------------------- 1. 钉钉通知（配置 DINGTALK_WEBHOOK 则启用） ----------------------
+      # 以下通知步骤保持不变（钉钉、企业微信、Server 酱、邮件）
       - name: 发送钉钉通知
         if: ${{ secrets.DINGTALK_WEBHOOK != '' && secrets.DINGTALK_WEBHOOK != null }}
         uses: zcong1993/dingtalk-action@v2
@@ -54,7 +59,6 @@ jobs:
           type: markdown
         continue-on-error: true
       
-      # ---------------------- 2. 企业微信通知（配置 WECOM_WEBHOOK 则启用） ----------------------
       - name: 发送企业微信通知
         if: ${{ secrets.WECOM_WEBHOOK != '' && secrets.WECOM_WEBHOOK != null }}
         uses: chf007/action-wechat-work@master
@@ -70,7 +74,6 @@ jobs:
             > **🤖 来自 GitHub Actions 自动推送**
         continue-on-error: true
       
-      # ---------------------- 3. Server 酱通知（配置 SERVERCHAN_SENDKEY 则启用） ----------------------
       - name: 发送 Server 酱通知
         if: ${{ secrets.SERVERCHAN_SENDKEY != '' && secrets.SERVERCHAN_SENDKEY != null }}
         run: |
@@ -79,7 +82,6 @@ jobs:
           -d "desp=### 药丸论坛签到详情\n\n${{ steps.checkin_step.outputs.checkin_msg }}\n\n---\n🤖 来自 GitHub Actions 自动推送"
         continue-on-error: true
       
-      # ---------------------- 4. 邮件通知（配置 EMAIL_USERNAME、EMAIL_PASSWORD、NOTIFY_EMAIL 均配置则启用） ----------------------
       - name: 发送签到结果邮件
         if: ${{ secrets.EMAIL_USERNAME != '' && secrets.EMAIL_PASSWORD != '' && secrets.NOTIFY_EMAIL != '' }}
         uses: dawidd6/action-send-mail@v3
