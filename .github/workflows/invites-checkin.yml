@@ -46,9 +46,12 @@ jobs:
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
           subject: 药丸论坛签到通知 - ${{ steps.checkin_step.outputs.checkin_result }}
+          # 关键：使用 | 保留正文的换行格式，完整展示 msg 中的所有详细信息
           body: |
-            药丸论坛签到任务执行结果：
-            ${{ steps.checkin_step.outputs.checkin_msg }}
+            【药丸论坛签到任务执行结果】
+             ————————————————————
+             ${{ steps.checkin_step.outputs.checkin_msg }}
+             ————————————————————
           to: ${{ secrets.NOTIFY_EMAIL }}
           from: GitHub Actions
           secure: true
