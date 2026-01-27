@@ -3,7 +3,7 @@ name: 药丸论坛签到
 on:
   # 定时触发（每天9点执行，UTC时间1点 = 北京时间9点）
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '30 1 * * *'
   # 手动触发
   workflow_dispatch:
 
