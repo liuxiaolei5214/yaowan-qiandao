@@ -1,7 +1,7 @@
 name: 药丸论坛签到
 
 on:
-  # 定时触发（每天9点执行，UTC时间1点 = 北京时间9点）
+  # 定时触发（UTC 1点30分 = 北京时间9点30分，非整点避免高峰）
   schedule:
     - cron: '30 1 * * *'
   # 手动触发
@@ -26,19 +26,62 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install requests
-          
+      
       - name: 记录触发时间（验证定时任务）
         run: |
           echo "定时任务触发成功，当前时间（UTC）：$(date -u)"
           echo "当前时间（北京时间）：$(date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')"
-          
+      
       - name: 执行签到脚本
         id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
         run: python checkin.py
       
+      # ---------------------- 1. 钉钉通知（配置 DINGTALK_WEBHOOK 则启用） ----------------------
+      - name: 发送钉钉通知
+        if: ${{ secrets.DINGTALK_WEBHOOK != '' && secrets.DINGTALK_WEBHOOK != null }}
+        uses: zcong1993/dingtalk-action@v2
+        with:
+          url: ${{ secrets.DINGTALK_WEBHOOK }}
+          msg: |
+            # 药丸论坛签到通知
+            ## ${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
+            ---
+            ${{ steps.checkin_step.outputs.checkin_msg }}
+            ---
+            🤖 来自 GitHub Actions 自动推送
+          type: markdown
+        continue-on-error: true
+      
+      # ---------------------- 2. 企业微信通知（配置 WECOM_WEBHOOK 则启用） ----------------------
+      - name: 发送企业微信通知
+        if: ${{ secrets.WECOM_WEBHOOK != '' && secrets.WECOM_WEBHOOK != null }}
+        uses: chf007/action-wechat-work@master
+        with:
+          msgtype: markdown
+          webhook: ${{ secrets.WECOM_WEBHOOK }}
+          content: |
+            ### 药丸论坛签到通知
+            > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
+            > **详情**：
+            > ${{ steps.checkin_step.outputs.checkin_msg }}
+            > **执行时间**：${{ github.run_at }}
+            > **🤖 来自 GitHub Actions 自动推送**
+        continue-on-error: true
+      
+      # ---------------------- 3. Server 酱通知（配置 SERVERCHAN_SENDKEY 则启用） ----------------------
+      - name: 发送 Server 酱通知
+        if: ${{ secrets.SERVERCHAN_SENDKEY != '' && secrets.SERVERCHAN_SENDKEY != null }}
+        run: |
+          curl -X POST "https://sctapi.ftqq.com/${{ secrets.SERVERCHAN_SENDKEY }}.send" \
+          -d "title=药丸论坛签到-${{ steps.checkin_step.outputs.checkin_result }}" \
+          -d "desp=### 药丸论坛签到详情\n\n${{ steps.checkin_step.outputs.checkin_msg }}\n\n---\n🤖 来自 GitHub Actions 自动推送"
+        continue-on-error: true
+      
+      # ---------------------- 4. 邮件通知（配置 EMAIL_USERNAME、EMAIL_PASSWORD、NOTIFY_EMAIL 均配置则启用） ----------------------
       - name: 发送签到结果邮件
+        if: ${{ secrets.EMAIL_USERNAME != '' && secrets.EMAIL_PASSWORD != '' && secrets.NOTIFY_EMAIL != '' }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: smtp.qq.com
@@ -46,12 +89,13 @@ jobs:
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
           subject: 药丸论坛签到通知 - ${{ steps.checkin_step.outputs.checkin_result }}
-          # 关键：使用 | 保留正文的换行格式，完整展示 msg 中的所有详细信息
           body: |
             【药丸论坛签到任务执行结果】
-             ————————————————————
-             ${{ steps.checkin_step.outputs.checkin_msg }}
-             ————————————————————
+            ————————————————————
+            ${{ steps.checkin_step.outputs.checkin_msg }}
+            ————————————————————
+            邮件由 GitHub Actions 自动发送
           to: ${{ secrets.NOTIFY_EMAIL }}
           from: GitHub Actions
           secure: true
+        continue-on-error: true
