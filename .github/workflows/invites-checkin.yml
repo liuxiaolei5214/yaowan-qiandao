@@ -1,44 +1,54 @@
 name: 药丸论坛签到
 
 on:
-  # 定时触发（每天9点执行，使用UTC时间，北京时间需要+8小时，所以设置为1点）
   schedule:
-    - cron: '0 1 * * *'
-  # 手动触发
+    - cron: '30 2 * * *'  # UTC 2点 = 北京时间10点（如需9点改为 30 1 * * *）
   workflow_dispatch:
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-      
+
       - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
+
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests
-      
+          pip install requests cryptography
+
+      - name: 记录触发时间
+        run: |
+          echo "定时任务触发成功，当前时间（UTC）：$(date -u)"
+          echo "当前时间（北京时间）：$(date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')"
+
       - name: 执行签到脚本
+        id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
+          INVITES_USERNAME: ${{ secrets.INVITES_USERNAME }}
+          INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: python checkin.py
-      
-      - name: 发送通知（可选）
-        if: failure()
-        uses: dawidd6/action-send-mail@v3
+
+      # 仅保留正确的企业微信通知插件（移除错误的钉钉/无效插件）
+      - name: 发送企业微信通知
+        uses: chf007/action-wechat-work@master
         with:
-          server_address: smtp.qq.com
-          server_port: 465
-          username: ${{ secrets.EMAIL_USERNAME }}
-          password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: 药丸论坛签到失败通知
-          body: 药丸论坛签到任务执行失败，请检查Cookie是否有效
-          to: ${{ secrets.NOTIFY_EMAIL }}
-          from: GitHub Actions
-          secure: true
+          msgtype: markdown
+          webhook: ${{ secrets.WECOM_WEBHOOK }}
+          content: |
+            ### 药丸论坛签到通知
+            > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
+            > **详情**：
+            > ${{ steps.checkin_step.outputs.checkin_msg }}
+            > **执行时间**：${{ github.run_at }}
+            > **🤖 GitHub Actions 自动推送**
+        continue-on-error: true
