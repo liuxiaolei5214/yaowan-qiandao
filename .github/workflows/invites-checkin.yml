@@ -2,7 +2,7 @@ name: 药丸论坛签到
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # UTC 2点 = 北京时间10点
+    - cron: '0 0 * * *'  # UTC 2点 = 北京时间10点
   workflow_dispatch:
 
 jobs:
