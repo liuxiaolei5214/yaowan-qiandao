@@ -10,9 +10,6 @@ def main():
     cookie = os.getenv('INVITES_COOKIE')
     if not cookie:
         print('错误：未配置 INVITES_COOKIE 环境变量')
-        # 输出结果标识，供 Actions 判断
-        print("::set-output name=checkin_result::failure")
-        print("::set-output name=checkin_msg::未配置Cookie")
         return False
 
     # 配置
@@ -131,11 +128,11 @@ def main():
             total_days = checkin_data['data']['attributes']['totalContinuousCheckIn']
             money = checkin_data['data']['attributes']['money']
             
-            msg = f"✅ 签到成功！\n📅 连续签到：{total_days} 天\n💊 剩余药丸：{money} 个\n🕐 签到时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            print(msg)
-            # 输出成功结果
-            print("::set-output name=checkin_result::success")
-            print(f"::set-output name=checkin_msg::{msg}")
+            print(f"\n✅ 签到成功！")
+            print(f"📅 连续签到：{total_days} 天")
+            print(f"💊 剩余药丸：{money} 个")
+            print(f"🕐 签到时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            
             return True
             
         except Exception as e:
@@ -144,11 +141,7 @@ def main():
                 print(f"等待 {RETRY_INTERVAL} 分钟后重试...")
                 time.sleep(RETRY_INTERVAL * 60)
     
-    fail_msg = f"❌ 所有 {RETRY_COUNT} 次签到尝试均失败\n🕐 时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    print(fail_msg)
-    # 输出失败结果
-    print("::set-output name=checkin_result::failure")
-    print(f"::set-output name=checkin_msg::{fail_msg}")
+    print("\n❌ 所有签到尝试均失败")
     return False
 
 if __name__ == "__main__":
