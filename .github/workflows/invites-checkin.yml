@@ -38,12 +38,13 @@ jobs:
           INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: python checkin.py
 
-      # 修复企业微信通知：参数名改为 url + 兜底空值
+      # 替换为稳定的企业微信通知插件（解决参数错误核心问题）
       - name: 发送企业微信通知
-        uses: chf007/action-wechat-work@master
+        uses: appleboy/wechat-work-action@master
         with:
+          # 该插件标准参数：webhook + 消息类型 + 内容
+          webhook: ${{ secrets.WECOM_WEBHOOK }}
           msgtype: markdown
-          url: ${{ secrets.WECOM_WEBHOOK }}  # 关键：webhook → url
           content: |
             ### 药丸论坛签到通知
             > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
