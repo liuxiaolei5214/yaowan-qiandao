@@ -2,7 +2,7 @@ name: 药丸论坛签到
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # UTC 2点 = 北京时间10点（如需9点改为 30 1 * * *）
+    - cron: '30 2 * * *'  # UTC 2点 = 北京时间10点
   workflow_dispatch:
 
 jobs:
@@ -38,17 +38,16 @@ jobs:
           INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: python checkin.py
 
-      # 仅保留正确的企业微信通知插件（移除错误的钉钉/无效插件）
+      # 修复企业微信通知：参数名改为 url + 兜底空值
       - name: 发送企业微信通知
         uses: chf007/action-wechat-work@master
         with:
           msgtype: markdown
-          webhook: ${{ secrets.WECOM_WEBHOOK }}
+          url: ${{ secrets.WECOM_WEBHOOK }}  # 关键：webhook → url
           content: |
             ### 药丸论坛签到通知
             > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
-            > **详情**：
-            > ${{ steps.checkin_step.outputs.checkin_msg }}
-            > **执行时间**：${{ github.run_at }}
+            > **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}
+            > **执行时间**：${{ github.run_at || '未知' }}
             > **🤖 GitHub Actions 自动推送**
         continue-on-error: true
