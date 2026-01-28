@@ -6,10 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
- 10点
-  workflow_dispatch:
-
-jobs:
   checkin:
     runs-on: ubuntu-latest
     permissions:
@@ -42,10 +38,8 @@ jobs:
           INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: python checkin.py
 
-      # 核心：用curl直接调用企业微信API（无第三方插件依赖）
       - name: 发送企业微信通知
         run: |
-          # 构造通知内容（markdown格式）
           CONTENT=$(cat << EOF
           {
             "msgtype": "markdown",
@@ -55,7 +49,6 @@ jobs:
           }
           EOF
           )
-          # 调用企业微信机器人API
           curl -X POST "${{ secrets.WECOM_WEBHOOK }}" \
             -H "Content-Type: application/json" \
             -d "$CONTENT"
