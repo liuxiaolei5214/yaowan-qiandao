@@ -1,7 +1,7 @@
 name: 药丸论坛签到
 
 on:
-  # 定时触发（每天9点执行，UTC时间1点 = 北京时间9点）
+  # 定时触发（每天9点执行，使用UTC时间，北京时间需要+8小时，所以设置为1点）
   schedule:
     - cron: '0 1 * * *'
   # 手动触发
@@ -10,9 +10,6 @@ on:
 jobs:
   checkin:
     runs-on: ubuntu-latest
-    outputs:
-      checkin_result: ${{ steps.checkin_step.outputs.checkin_result }}
-      checkin_msg: ${{ steps.checkin_step.outputs.checkin_msg }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -28,21 +25,20 @@ jobs:
           pip install requests
       
       - name: 执行签到脚本
-        id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
         run: python checkin.py
       
-      - name: 发送企业微信通知
-        uses: chf007/action-wechat-work@master
+      - name: 发送通知（可选）
+        if: failure()
+        uses: dawidd6/action-send-mail@v3
         with:
-         # 消息类型：text/markdown
-         msgtype: markdown
-         # Webhook 地址
-         webhook: ${{ secrets.WECOM_WEBHOOK }}
-         # 消息内容（支持 Markdown）
-         content: |
-           ### 药丸论坛签到通知
-           > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
-           > **详情**：${{ steps.checkin_step.outputs.checkin_msg }}
-           > **时间**：${{ github.run_at }}
+          server_address: smtp.qq.com
+          server_port: 465
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: 药丸论坛签到失败通知
+          body: 药丸论坛签到任务执行失败，请检查Cookie是否有效
+          to: ${{ secrets.NOTIFY_EMAIL }}
+          from: GitHub Actions
+          secure: true
