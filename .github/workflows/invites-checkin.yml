@@ -40,15 +40,19 @@ jobs:
 
       - name: 发送企业微信通知
         run: |
+          # 获取北京时间（解决执行时间未知）
+          BEIJING_TIME=$(date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')
+          # 构造通知内容
           CONTENT=$(cat << EOF
           {
             "msgtype": "markdown",
             "markdown": {
-              "content": "### 药丸论坛签到通知\n> **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}\n> **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}\n> **执行时间**：${{ github.run_at || '未知' }}\n> **🤖 GitHub Actions 自动推送**"
+              "content": "### 药丸论坛签到通知\n> **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}\n> **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}\n> **执行时间**：$BEIJING_TIME\n> **🤖 GitHub Actions 自动推送**"
             }
           }
           EOF
           )
+          # 调用企业微信API
           curl -X POST "${{ secrets.WECOM_WEBHOOK }}" \
             -H "Content-Type: application/json" \
             -d "$CONTENT"
