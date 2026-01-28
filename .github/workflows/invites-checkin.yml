@@ -1,53 +1,98 @@
-name: 药丸论坛签到
+name: 药丸论坛每日签到
 
 on:
   schedule:
-    - cron: '30 2 * * *'  # UTC 1点 = 北京时间9点
-  workflow_dispatch:
+    # 每天北京时间 9:00 执行 (UTC+8)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # 允许手动触发测试
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
+    name: 药丸论坛签到
     steps:
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: 设置 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.x'
 
-      - name: 安装依赖
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests cryptography
+          pip install requests beautifulsoup4 lxml
 
-      - name: 记录触发时间
+      # === 关键：将 secrets 安全加载到环境变量 ===
+      - name: Load secrets into environment
         run: |
-          echo "定时任务触发成功，当前时间（UTC）： $ (date -u)"
-          echo "当前时间（北京时间）： $ (date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')"
+          # 只有当 secret 非空时才写入 env，避免写入 "null" 字符串
+          [ -n " $ {{ secrets.USERNAME }}" ] && echo "USERNAME= $ {{ secrets.USERNAME }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.PASSWORD }}" ] && echo "PASSWORD= $ {{ secrets.PASSWORD }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.DINGTALK_WEBHOOK }}" ] && echo "DINGTALK_WEBHOOK= $ {{ secrets.DINGTALK_WEBHOOK }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.WECHAT_WEBHOOK }}" ] && echo "WECHAT_WEBHOOK= $ {{ secrets.WECHAT_WEBHOOK }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.SERVERCHAN_SENDKEY }}" ] && echo "SERVERCHAN_SENDKEY= $ {{ secrets.SERVERCHAN_SENDKEY }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.EMAIL_USERNAME }}" ] && echo "EMAIL_USERNAME= $ {{ secrets.EMAIL_USERNAME }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.EMAIL_PASSWORD }}" ] && echo "EMAIL_PASSWORD= $ {{ secrets.EMAIL_PASSWORD }}" >>  $ GITHUB_ENV
+          [ -n " $ {{ secrets.NOTIFY_EMAIL }}" ] && echo "NOTIFY_EMAIL= $ {{ secrets.NOTIFY_EMAIL }}" >>  $ GITHUB_ENV
 
-      - name: 执行签到脚本
+      - name: Run checkin script
         id: checkin_step
         env:
-          INVITES_COOKIE:  $ {{ secrets.INVITES_COOKIE }}
-          INVITES_USERNAME:  $ {{ secrets.INVITES_USERNAME }}
-          INVITES_PASSWORD:  $ {{ secrets.INVITES_PASSWORD }}
-        run: python checkin.py
+          USERNAME:  $ {{ env.USERNAME }}
+          PASSWORD:  $ {{ env.PASSWORD }}
+        run: |
+          python scripts/checkin.py
+          # 确保脚本通过  $ GITHUB_OUTPUT 设置输出
+          # 示例：
+          # echo "checkin_result=success" >>  $ GITHUB_OUTPUT
+          # echo "message=签到成功，获得10积分。" >>  $ GITHUB_OUTPUT
 
-      - name: 发送企业微信通知
-        uses: chf007/action-wechat-work@master
+      # =============== 通知部分 ===============
+      
+      # 钉钉通知
+      - name: 发送钉钉通知
+        if:  ${{ env.DINGTALK_WEBHOOK != '' }}
+        uses: zcorg1993/dingtalk-action@v2
         with:
-          msgtype: markdown
-          webhook:  $ {{ secrets.WECOM_WEBHOOK }}
-          content: |
-            ### 药丸论坛签到通知
-            > **状态**： $ {{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
-            > **详情**：
-            >  $ {{ steps.checkin_step.outputs.checkin_msg }}
-            > **执行时间**： $ {{ github.run_at }}
-            > **🤖 GitHub Actions 自动推送**
-        continue-on-error: true
+          url:  $ {{ env.DINGTALK_WEBHOOK }}
+          msg: |
+            🎉 药丸论坛签到
+            👉  $ {{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 成功!' || '❌ 失败!' }}
+            💬  $ {{ steps.checkin_step.outputs.message }}
+
+      # 企业微信通知
+      - name: 发送企业微信通知
+        if:  ${{ env.WECHAT_WEBHOOK != '' }}
+        uses: Guo-Linka/WeCom-Workflow-Action@main
+        with:
+          wecom_webhook:  $ {{ env.WECHAT_WEBHOOK }}
+          wecom_msg: |
+            {"msgtype":"text","text":{"content":"🎉 药丸论坛签到\n👉  $ {{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 成功!' || '❌ 失败!' }}\n💬  $ {{ steps.checkin_step.outputs.message }}"}}
+
+      # Server酱通知
+      - name: 发送Server酱通知
+        if:  ${{ env.SERVERCHAN_SENDKEY != '' }}
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: 'https://sctapi.ftqq.com/ $ {{ env.SERVERCHAN_SENDKEY }}.send'
+          method: 'POST'
+          data: '{"title":"药丸论坛签到","desp":"状态： $ {{ steps.checkin_step.outputs.checkin_result == ''success'' ? ''✅ 成功'' : ''❌ 失败'' }}\\n\\n结果： $ {{ steps.checkin_step.outputs.message }}"}'
+          headers: '{"Content-Type":"application/json"}'
+
+      # 邮件通知
+      - name: 发送邮件通知
+        if:  ${{ env.EMAIL_USERNAME != '' && env.EMAIL_PASSWORD != '' && env.NOTIFY_EMAIL != '' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.qq.com
+          server_port: 465
+          username:  $ {{ env.EMAIL_USERNAME }}
+          password:  $ {{ env.EMAIL_PASSWORD }}
+          to:  $ {{ env.NOTIFY_EMAIL }}
+          from:  $ {{ env.EMAIL_USERNAME }}
+          subject: 药丸论坛签到通知
+          body: |
+            状态:  $ {{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
+            详情:  $ {{ steps.checkin_step.outputs.message }}
