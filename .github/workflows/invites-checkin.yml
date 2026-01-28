@@ -6,6 +6,10 @@ on:
   workflow_dispatch:
 
 jobs:
+ 10点
+  workflow_dispatch:
+
+jobs:
   checkin:
     runs-on: ubuntu-latest
     permissions:
@@ -38,17 +42,21 @@ jobs:
           INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: python checkin.py
 
-      # 替换为稳定的企业微信通知插件（解决参数错误核心问题）
+      # 核心：用curl直接调用企业微信API（无第三方插件依赖）
       - name: 发送企业微信通知
-        uses: appleboy/wechat-work-action@master
-        with:
-          # 该插件标准参数：webhook + 消息类型 + 内容
-          webhook: ${{ secrets.WECOM_WEBHOOK }}
-          msgtype: markdown
-          content: |
-            ### 药丸论坛签到通知
-            > **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}
-            > **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}
-            > **执行时间**：${{ github.run_at || '未知' }}
-            > **🤖 GitHub Actions 自动推送**
+        run: |
+          # 构造通知内容（markdown格式）
+          CONTENT=$(cat << EOF
+          {
+            "msgtype": "markdown",
+            "markdown": {
+              "content": "### 药丸论坛签到通知\n> **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}\n> **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}\n> **执行时间**：${{ github.run_at || '未知' }}\n> **🤖 GitHub Actions 自动推送**"
+            }
+          }
+          EOF
+          )
+          # 调用企业微信机器人API
+          curl -X POST "${{ secrets.WECOM_WEBHOOK }}" \
+            -H "Content-Type: application/json" \
+            -d "$CONTENT"
         continue-on-error: true
