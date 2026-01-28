@@ -13,7 +13,7 @@ HEADERS = {
 }
 
 def get_github_output(name, value):
-    """输出 GitHub Actions 步骤变量（关键：让 YAML 能读取到）"""
+    """输出 GitHub Actions 步骤变量"""
     print(f"::set-output name={name}::{value}")
 
 def extract_cookie_value(cookie_str, key):
@@ -31,7 +31,6 @@ def refresh_session(flarum_remember):
     try:
         response = session.get(BASE_URL)
         response.raise_for_status()
-        # 提取刷新后的 flarum_session
         flarum_session = session.cookies.get("flarum_session")
         return session, flarum_session
     except Exception as e:
@@ -70,15 +69,26 @@ def login(username, password):
         return None, None, None
 
 def checkin(session):
-    """执行签到操作"""
+    """执行签到操作：优先提取UserID，失败则用304兜底"""
     try:
-        # 获取用户信息（提取 UserID）
-        user_resp = session.get(f"{BASE_URL}/api/users/me")
-        user_data = user_resp.json()
-        user_id = user_data.get("data", {}).get("id")
-        print(f"提取 UserID 成功: {user_id}")
+        user_id = None
+        # 步骤1：优先尝试从 api/users/me 提取 UserID
+        try:
+            user_resp = session.get(f"{BASE_URL}/api/users/me")
+            user_resp.raise_for_status()  # 检查接口是否返回200
+            user_data = user_resp.json()
+            user_id = user_data.get("data", {}).get("id")
+            print(f"从 api/users/me 提取 UserID 成功: {user_id}")
+        except Exception as e:
+            print(f"从 api/users/me 提取 UserID 失败：{str(e)}，使用兜底值 304")
+            user_id = 304  # 提取失败则用固定值兜底
         
-        # 执行签到
+        # 步骤2：最终兜底（防止极端情况 user_id 仍为空）
+        if user_id is None or user_id == "":
+            user_id = 304
+            print(f"UserID 为空，强制使用兜底值：{user_id}")
+        
+        # 步骤3：执行签到
         checkin_resp = session.post(
             f"{BASE_URL}/api/extensions/flarum-ext-money/checkin",
             json={"userId": user_id}
@@ -86,33 +96,33 @@ def checkin(session):
         checkin_data = checkin_resp.json()
         
         if checkin_resp.status_code == 200:
-            # 解析签到结果
+            # 解析签到成功结果
             success_msg = checkin_data.get("message", "签到成功！")
-            consecutive_days = checkin_data.get("days", 0)  # 连续签到天数
-            remaining_coins = checkin_data.get("money", 0)  # 剩余药丸
+            consecutive_days = checkin_data.get("days", 0)
+            remaining_coins = checkin_data.get("money", 0)
             beijing_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            # 打印日志（和你之前的日志格式一致）
+            # 打印日志
             print("✅ 签到成功！")
-            print(f"🔴 连续签到：{consecutive_days} 天")
-            print(f"🟡 剩余药丸：{remaining_coins} 个")
-            print(f"⌚ 签到时间：{beijing_time}")
+            print(f"📅 连续签到：{consecutive_days} 天")
+            print(f"💊 剩余药丸：{remaining_coins} 个")
+            print(f"🕐 签到时间：{beijing_time}")
             
-            # 关键：输出 GitHub Actions 变量（让 YAML 读取）
+            # 输出 GitHub Actions 变量
             get_github_output("checkin_result", "success")
             get_github_output(
                 "checkin_msg", 
-                f"连续签到：{consecutive_days} 天，剩余药丸：{remaining_coins} 个，签到时间：{beijing_time}"
+                f"连续签到：{consecutive_days} 天，剩余药丸：{remaining_coins} 个，签到时间：{beijing_time}（使用UserID：{user_id}）"
             )
             return True, success_msg
         else:
-            error_msg = checkin_data.get("message", "签到失败")
-            print(f"❌ 签到失败：{error_msg}")
+            error_msg = f"签到失败：{checkin_data.get('message', '接口返回错误')}（使用UserID：{user_id}）"
+            print(f"❌ {error_msg}")
             get_github_output("checkin_result", "failure")
             get_github_output("checkin_msg", error_msg)
             return False, error_msg
     except Exception as e:
-        error_msg = f"签到异常：{str(e)}"
+        error_msg = f"签到异常：{str(e)}（兜底UserID：304）"
         print(f"❌ {error_msg}")
         get_github_output("checkin_result", "failure")
         get_github_output("checkin_msg", error_msg)
