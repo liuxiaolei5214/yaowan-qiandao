@@ -9,15 +9,32 @@ from datetime import datetime
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 GITHUB_REPO = os.getenv('GITHUB_REPOSITORY')  # 格式：owner/repo，由 GitHub Actions 自动提供
 
+
+def set_github_output(name, value):
+    """
+    向 GitHub Actions 的输出文件写入键值对。
+    支持多行文本（使用 EOF 分隔符），兼容本地调试。
+    """
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            # 使用 heredoc 风格避免换行/特殊字符问题
+            f.write(f"{name}<<EOF\n{value}\nEOF\n")
+    else:
+        # 本地调试时打印（不影响功能）
+        print(f"[DEBUG] Would set output {name} = '''\n{value}\n'''")
+
+
 def main():
     # 从环境变量获取配置
     cookie = os.getenv('INVITES_COOKIE')
     username = os.getenv('INVITES_USERNAME')
     password = os.getenv('INVITES_PASSWORD')
+    
     if not cookie and not (username and password):
-        print('错误：未配置 Cookie 且未配置用户名密码')
-        print("::set-output name=checkin_result::failure")
-        print("::set-output name=checkin_msg::未配置 Cookie 和账号密码，无法签到")
+        error_msg = "未配置 Cookie 且未配置用户名密码，无法签到"
+        print(f"错误：{error_msg}")
+        set_github_output("checkin_result", "failure")
+        set_github_output("checkin_msg", error_msg)
         return False
 
     # 基础配置
@@ -69,11 +86,16 @@ def main():
                 time.sleep(RETRY_INTERVAL * 60)
 
     # 所有尝试失败
-    fail_msg = f"❌ 所有 {RETRY_COUNT} 次签到尝试均失败\n🕐 执行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n💡 建议：检查用户名密码是否正确，或手动更新 Cookie"
+    fail_msg = (
+        f"❌ 所有 {RETRY_COUNT} 次签到尝试均失败\n"
+        f"🕐 执行时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        f"💡 建议：检查用户名密码是否正确，或手动更新 Cookie"
+    )
     print(fail_msg)
-    print("::set-output name=checkin_result::failure")
-    print(f"::set-output name=checkin_msg::{fail_msg}")
+    set_github_output("checkin_result", "failure")
+    set_github_output("checkin_msg", fail_msg)
     return False
+
 
 def cookie_checkin(cookie, user_agent):
     """使用 Cookie 执行签到，返回是否成功"""
@@ -163,15 +185,22 @@ def cookie_checkin(cookie, user_agent):
         checkin_data = checkin_response.json()
         total_days = checkin_data['data']['attributes']['totalContinuousCheckIn']
         money = checkin_data['data']['attributes']['money']
-        msg = f"✅ 签到成功！\n📅 连续签到：{total_days} 天\n💊 剩余药丸：{money} 个\n🕐 签到时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n🍪 Cookie 状态：正常"
+        msg = (
+            f"✅ 签到成功！\n"
+            f"📅 连续签到：{total_days} 天\n"
+            f"💊 剩余药丸：{money} 个\n"
+            f"🕐 签到时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"🍪 Cookie 状态：正常"
+        )
         print(msg)
-        print("::set-output name=checkin_result::success")
-        print(f"::set-output name=checkin_msg::{msg}")
+        set_github_output("checkin_result", "success")
+        set_github_output("checkin_msg", msg)
         return True
 
     except Exception as e:
         print(f"Cookie 签到异常：{str(e)}")
         return False
+
 
 def login_with_credentials(username, password, user_agent):
     """使用用户名密码登录，返回登录结果（包含新 Cookie）"""
@@ -235,6 +264,7 @@ def login_with_credentials(username, password, user_agent):
     except Exception as e:
         return {"success": False, "error": f"登录异常：{str(e)}"}
 
+
 def update_github_secret(secret_name, secret_value):
     """通过 GitHub API 更新仓库 Secret"""
     try:
@@ -256,7 +286,7 @@ def update_github_secret(secret_name, secret_value):
         public_key = pubkey_data["key"]
         key_id = pubkey_data["key_id"]
 
-        # 2. 加密 Secret 值（GitHub 要求 Secret 必须用公共密钥加密）
+        # 2. 加密 Secret 值
         public_key_obj = serialization.load_pem_public_key(
             public_key.encode("utf-8"),
             backend=None
@@ -271,7 +301,7 @@ def update_github_secret(secret_name, secret_value):
         )
         encrypted_b64 = base64.b64encode(encrypted_value).decode("utf-8")
 
-        # 3. 上传加密后的 Secret 到 GitHub
+        # 3. 上传加密后的 Secret
         update_url = f"https://api.github.com/repos/{GITHUB_REPO}/actions/secrets/{secret_name}"
         update_data = {
             "encrypted_value": encrypted_b64,
@@ -293,6 +323,8 @@ def update_github_secret(secret_name, secret_value):
         print(f"更新 Secret 异常：{str(e)}")
         return False
 
+
 if __name__ == "__main__":
     success = main()
+    # 可选：根据结果设置退出码（非必需，因已通过 outputs 控制）
     exit(0 if success else 1)
