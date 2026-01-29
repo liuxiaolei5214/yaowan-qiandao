@@ -2,7 +2,7 @@ name: 药丸论坛签到
 
 on:
   schedule:
-    - cron: '20 1 * * *'  # UTC 2点 = 北京时间10点
+    - cron: '20 1 * * *'  # UTC 1:20 = 北京时间 9:20（注释修正，原注释写的"UTC 2点"是错误的）
   workflow_dispatch:
 
 jobs:
@@ -42,12 +42,12 @@ jobs:
         run: |
           # 获取北京时间（解决执行时间未知）
           BEIJING_TIME=$(date +'%Y-%m-%d %H:%M:%S' -d '+8 hours')
-          # 构造通知内容
+          # 构造通知内容（微调格式，与Cloudflare一致）
           CONTENT=$(cat << EOF
           {
             "msgtype": "markdown",
             "markdown": {
-              "content": "### 药丸论坛签到通知\n> **状态**：${{ steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功' || '❌ 签到失败' }}\n> **详情**：${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}\n> **执行时间**：$BEIJING_TIME\n> **🤖 GitHub Actions 自动推送**"
+              "content": "### 药丸论坛签到通知\n> ${ { steps.checkin_step.outputs.checkin_result == 'success' && '✅ 签到成功！' || '❌ 签到失败！' } }\n> ${{ steps.checkin_step.outputs.checkin_msg || '暂无详细信息' }}\n> 🤖 GitHub Actions 自动推送"
             }
           }
           EOF
