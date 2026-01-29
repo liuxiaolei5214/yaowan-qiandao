@@ -2,143 +2,210 @@ import requests
 import re
 import os
 from datetime import datetime
+from datetime import timezone
 
-# 配置（需替换为新版签到接口，当前是原接口，需抓包更新）
+# 配置（已适配新版接口，无需修改）
 BASE_URL = "https://invites.fun"
-CHECKIN_API = "/api/extensions/flarum-ext-money/checkin"  # 需抓包替换为新版接口
+USER_ID = 304  # 你的固定UserID
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     "Referer": BASE_URL,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "X-CSRF-Token": "",  # 新增：部分接口需要CSRF Token
+    "Content-Type": "application/json; charset=UTF-8",
+    "X-Http-Method-Override": "PATCH",  # 新版接口核心请求头
 }
 
 def set_github_output(name, value):
-    """替换弃用的::set-output，使用官方推荐的环境文件方式"""
-    with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-        f.write(f"{name}={value}\n")
+    """GitHub Actions 官方推荐的输出方式（替代弃用的::set-output）"""
+    if "GITHUB_OUTPUT" in os.environ:
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"{name}={value}\n")
+    else:
+        print(f"[DEBUG] {name}={value}")  # 本地调试用
 
 def extract_cookie_value(cookie_str, key):
+    """从Cookie字符串中提取指定键的值"""
     pattern = re.compile(rf"{key}=([^;]+)")
     match = pattern.search(cookie_str)
     return match.group(1) if match else None
 
-def refresh_session(flarum_remember):
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    session.cookies.set("flarum_remember", flarum_remember, domain="invites.fun", path="/")
+def get_latest_csrf_token(session):
+    """动态获取最新CSRF Token（优先响应头，兜底HTML）"""
     try:
-        response = session.get(BASE_URL)
-        response.raise_for_status()
-        # 提取CSRF Token（适配部分接口要求）
-        csrf_token = re.search(r'content="([^"]+)" name="csrf-token"', response.text)
+        resp = session.get(BASE_URL, headers=HEADERS)
+        resp.raise_for_status()
+        # 方式1：从响应头获取（Flarum 优先推荐）
+        csrf_token = resp.headers.get("X-Csrf-Token")
         if csrf_token:
-            session.headers["X-CSRF-Token"] = csrf_token.group(1)
-        return session, session.cookies.get("flarum_session")
+            return csrf_token
+        # 方式2：从HTML元标签提取（兜底）
+        csrf_token = re.search(r'<meta name="csrf-token" content="([^"]+)">', resp.text)
+        if csrf_token:
+            return csrf_token.group(1)
+        # 方式3：从JS变量提取（终极兜底）
+        csrf_token = re.search(r'X-Csrf-Token": "([^"]+)"', resp.text)
+        return csrf_token.group(1) if csrf_token else None
     except Exception as e:
-        print(f"刷新Session失败：{str(e)}")
-        return session, None
+        print(f"获取CSRF Token失败：{str(e)}")
+        return None
+
+def refresh_session(flarum_remember):
+    """用Cookie刷新会话并获取CSRF Token"""
+    session = requests.Session()
+    # 设置Cookie
+    session.cookies.set("flarum_remember", flarum_remember, domain="invites.fun", path="/")
+    # 获取最新CSRF Token
+    csrf_token = get_latest_csrf_token(session)
+    if csrf_token:
+        session.headers["X-Csrf-Token"] = csrf_token
+        print(f"刷新Session成功，CSRF Token：{csrf_token[:10]}***")
+        return session, True
+    else:
+        print("刷新Session失败：未获取到CSRF Token")
+        return session, False
 
 def login(username, password):
+    """账号密码登录（动态CSRF Token）"""
     session = requests.Session()
-    session.headers.update(HEADERS)
     try:
-        resp = session.get(f"{BASE_URL}/login")
-        csrf_token = re.search(r'name="csrfToken" value="([^"]+)"', resp.text).group(1)
+        # 1. 获取登录页CSRF Token
+        login_page_resp = session.get(f"{BASE_URL}/login", headers=HEADERS)
+        login_page_resp.raise_for_status()
+        csrf_token = re.search(r'name="csrfToken" value="([^"]+)"', login_page_resp.text)
+        if not csrf_token:
+            print("登录失败：未找到登录页CSRF Token")
+            return None, None, None
+        login_csrf = csrf_token.group(1)
+
+        # 2. 发送登录请求
         login_data = {
-            "csrfToken": csrf_token,
+            "csrfToken": login_csrf,
             "identification": username,
             "password": password,
             "remember": "on"
         }
-        login_resp = session.post(f"{BASE_URL}/login", data=login_data, allow_redirects=True)
-        if "flarum_remember" in session.cookies and "flarum_session" in session.cookies:
-            print("登录成功")
-            return session, session.cookies.get("flarum_remember"), session.cookies.get("flarum_session")
+        login_resp = session.post(
+            f"{BASE_URL}/login",
+            data=login_data,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            allow_redirects=False
+        )
+        login_resp.raise_for_status()
+
+        # 3. 校验登录结果
+        flarum_remember = session.cookies.get("flarum_remember")
+        flarum_session = session.cookies.get("flarum_session")
+        if flarum_remember and flarum_session:
+            print("登录成功，获取到有效Cookie")
+            # 登录后更新CSRF Token
+            csrf_token = get_latest_csrf_token(session)
+            if csrf_token:
+                session.headers["X-Csrf-Token"] = csrf_token
+            return session, flarum_remember, flarum_session
         else:
-            print("登录失败：无有效Cookie")
+            print("登录失败：未获取到flarum_remember或flarum_session")
             return None, None, None
     except Exception as e:
         print(f"登录异常：{str(e)}")
         return None, None, None
 
 def checkin(session):
+    """执行签到（调用新版 /api/users/304 接口）"""
     try:
-        user_id = 304  # 固定兜底值（已验证有效）
-        print(f"使用UserID：{user_id}")
+        # 1. 构造签到请求体（与Cloudflare一致）
+        checkin_data = {
+            "data": {
+                "attributes": {
+                    "action": "checkin",
+                    "userId": USER_ID
+                }
+            }
+        }
 
-        # 调用签到接口（需替换为抓包到的新版接口）
+        # 2. 发送签到请求
         checkin_resp = session.post(
-            f"{BASE_URL}{CHECKIN_API}",
-            json={"userId": user_id}
+            f"{BASE_URL}/api/users/{USER_ID}",
+            json=checkin_data,
+            headers=session.headers
         )
-        checkin_resp.raise_for_status()  # 检测接口状态码
-        checkin_data = checkin_resp.json()
+        checkin_resp.raise_for_status()  # 非200状态码抛出异常
+        resp_text = checkin_resp.text
+        resp_json = checkin_resp.json()
 
-        # 签到成功逻辑
-        success_msg = checkin_data.get("message", "签到成功")
-        consecutive_days = checkin_data.get("days", 0)
-        remaining_coins = checkin_data.get("money", 0)
-        beijing_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 3. 提取核心签到信息（与Cloudflare通知格式对齐）
+        attributes = resp_json.get("data", {}).get("attributes", {})
+        continuous_days = attributes.get("totalContinuousCheckIn", 0)
+        remaining_money = attributes.get("money", 0)
+        last_checkin_time = attributes.get("lastCheckinTime", "")
         
-        print("✅ 签到成功！")
-        print(f"📅 连续签到：{consecutive_days}天")
-        print(f"💊 剩余药丸：{remaining_coins}个")
+        # 格式化签到时间（北京时间）
+        if last_checkin_time:
+            # 转换为北京时间（原时间是UTC）
+            utc_time = datetime.strptime(last_checkin_time, "%Y-%m-%d %H:%M:%S")
+            beijing_time = utc_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
+            checkin_time = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            checkin_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 4. 输出结果并设置GitHub Output
+        success_msg = f"✅ 签到成功！\n📅 连续签到：{continuous_days}天\n💰 剩余药丸：{remaining_money}个\n⏰ 签到时间：{checkin_time}"
+        print(success_msg)
         set_github_output("checkin_result", "success")
-        set_github_output(
-            "checkin_msg",
-            f"连续签到：{consecutive_days}天，剩余药丸：{remaining_coins}个，签到时间：{beijing_time}（UserID：{user_id}）"
-        )
+        set_github_output("checkin_msg", success_msg)
         return True, success_msg
 
+    except requests.exceptions.HTTPError as e:
+        # 处理接口HTTP错误
+        error_msg = f"❌ 签到失败：接口返回{checkin_resp.status_code}错误\n响应内容：{resp_text[:200]}"
     except Exception as e:
-        # 签到失败逻辑（输出具体错误）
-        error_msg = f"接口返回错误：{str(e)}（UserID：{user_id}）"
-        print(f"❌ 签到失败：{error_msg}")
-        set_github_output("checkin_result", "failure")
-        set_github_output("checkin_msg", error_msg)
-        return False, error_msg
+        # 处理其他异常
+        error_msg = f"❌ 签到异常：{str(e)}"
+    
+    print(error_msg)
+    set_github_output("checkin_result", "failure")
+    set_github_output("checkin_msg", error_msg)
+    return False, error_msg
 
 def main():
+    """主逻辑：Cookie优先 → 登录兜底 → 执行签到"""
+    # 从环境变量读取配置（与原脚本一致）
     invites_cookie = os.getenv("INVITES_COOKIE", "")
     invites_username = os.getenv("INVITES_USERNAME", "")
     invites_password = os.getenv("INVITES_PASSWORD", "")
-    
-    session = requests.Session()
-    session.headers.update(HEADERS)
-    flarum_remember = None
-    flarum_session = None
 
-    # 优先用Cookie登录
+    session = None
+    cookie_valid = False
+
+    # 步骤1：优先使用Cookie登录
     if invites_cookie:
         flarum_remember = extract_cookie_value(invites_cookie, "flarum_remember")
         if flarum_remember:
-            print("提取flarum_remember成功")
-            session, flarum_session = refresh_session(flarum_remember)
-            if flarum_session:
-                print("获取flarum_session成功")
-            else:
-                print("Cookie失效，尝试账号密码登录")
+            print("=== 尝试使用Cookie登录 ===")
+            session, cookie_valid = refresh_session(flarum_remember)
+        else:
+            print("Cookie格式错误：未提取到flarum_remember")
 
-    # Cookie失效则用账号密码
-    if not flarum_session and invites_username and invites_password:
-        session, flarum_remember, flarum_session = login(invites_username, invites_password)
-        if not flarum_session:
-            print("登录失败，无法签到")
+    # 步骤2：Cookie失效则用账号密码登录
+    if not cookie_valid and invites_username and invites_password:
+        print("=== Cookie失效，尝试账号密码登录 ===")
+        session, _, _ = login(invites_username, invites_password)
+        if not session:
+            error_msg = "❌ 登录失败，无法执行签到"
             set_github_output("checkin_result", "failure")
-            set_github_output("checkin_msg", "Cookie失效且账号密码登录失败")
+            set_github_output("checkin_msg", error_msg)
             return
 
-    # 执行签到
-    if flarum_session:
-        session.cookies.set("flarum_session", flarum_session, domain="invites.fun", path="/")
+    # 步骤3：执行签到
+    if session and cookie_valid:
+        print("=== 开始执行签到 ===")
         checkin(session)
     else:
-        print("无有效Cookie，无法签到")
+        error_msg = "❌ 无有效会话，无法执行签到"
         set_github_output("checkin_result", "failure")
-        set_github_output("checkin_msg", "无有效Cookie")
+        set_github_output("checkin_msg", error_msg)
+        print(error_msg)
 
 if __name__ == "__main__":
-    print("第1次签到尝试")
+    print("=== 药丸论坛签到脚本（GitHub版·新版接口）===")
     main()
