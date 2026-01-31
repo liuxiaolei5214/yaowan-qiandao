@@ -4,15 +4,22 @@ import os
 from datetime import datetime
 from datetime import timezone
 
-# 核心配置（必须替换为自己的信息）
+# 核心配置（严格匹配抓包结果）
 BASE_URL = "https://invites.fun"
-USER_ID = 304  # 你的真实用户ID（从网页URL/抓包获取，必填）
+USER_ID = 304  # 抓包确认的真实签到ID（必须是304）
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0",
     "Referer": BASE_URL,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Content-Type": "application/json; charset=UTF-8",
+    "X-Http-Method-Override": "PATCH",  # 恢复抓包中的伪PATCH头
+    "Sec-Ch-Ua": '"Not/A)Brand";v="8", "Chromium";v="144", "Microsoft Edge";v="144"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
+    "Origin": BASE_URL
 }
 
 def set_github_output(name, value):
@@ -50,10 +57,12 @@ def get_latest_csrf_token(session):
         print(f"获取CSRF Token失败：{str(e)}")
         return None
 
-def refresh_session(flarum_remember):
-    """用Cookie刷新会话并获取CSRF Token"""
+def refresh_session(cookie_str):
+    """用完整Cookie刷新会话（同时包含flarum_remember和flarum_session）"""
     session = requests.Session()
-    session.cookies.set("flarum_remember", flarum_remember, domain="invites.fun", path="/")
+    # 直接设置完整Cookie，避免仅提取单个字段丢失登录态
+    session.headers["Cookie"] = cookie_str
+    # 获取最新CSRF Token
     csrf_token = get_latest_csrf_token(session)
     if csrf_token:
         session.headers["X-Csrf-Token"] = csrf_token
@@ -91,14 +100,18 @@ def login(username, password):
         )
         login_resp.raise_for_status()
 
-        # 校验登录结果
-        flarum_remember = session.cookies.get("flarum_remember")
-        flarum_session = session.cookies.get("flarum_session")
+        # 提取完整Cookie（包含flarum_remember + flarum_session）
+        cookies = session.cookies.get_dict()
+        flarum_remember = cookies.get("flarum_remember")
+        flarum_session = cookies.get("flarum_session")
         if flarum_remember and flarum_session:
-            print("登录成功，获取到有效Cookie")
+            full_cookie = f"flarum_remember={flarum_remember}; flarum_session={flarum_session}"
+            print("登录成功，获取到完整Cookie")
+            # 登录后更新CSRF Token
             csrf_token = get_latest_csrf_token(session)
             if csrf_token:
                 session.headers["X-Csrf-Token"] = csrf_token
+            session.headers["Cookie"] = full_cookie
             return session, flarum_remember, flarum_session
         else:
             print("登录失败：未获取到flarum_remember或flarum_session")
@@ -108,7 +121,7 @@ def login(username, password):
         return None, None, None
 
 def checkin(session):
-    """执行签到（精准判断真实签到状态）"""
+    """执行签到（严格匹配网页端抓包请求）"""
     resp_text = ""
     checkin_resp = None
     try:
@@ -119,7 +132,7 @@ def checkin(session):
         pre_continuous_days = pre_data.get("data", {}).get("attributes", {}).get("totalContinuousCheckIn", 0)
         pre_money = pre_data.get("data", {}).get("attributes", {}).get("money", 0)
 
-        # 2. 构造签到请求体
+        # 2. 构造与抓包完全一致的签到请求体
         checkin_data = {
             "data": {
                 "attributes": {
@@ -129,11 +142,13 @@ def checkin(session):
             }
         }
 
-        # 3. 发送PATCH签到请求（核心修复405错误）
-        checkin_resp = session.patch(
+        # 3. 发送与抓包一致的POST请求（带伪PATCH头）
+        checkin_headers = session.headers.copy()
+        checkin_headers["X-Http-Method-Override"] = "PATCH"  # 强制保留抓包中的伪PATCH头
+        checkin_resp = session.post(  # 改回POST（关键！）
             f"{BASE_URL}/api/users/{USER_ID}",
             json=checkin_data,
-            headers=session.headers
+            headers=checkin_headers
         )
         checkin_resp.raise_for_status()
         resp_text = checkin_resp.text
@@ -162,8 +177,8 @@ def checkin(session):
         success_reasons = []
         if is_real_success:
             success_reasons.append("签到日期为当天")
-            if post_continuous_days >= pre_continuous_days:
-                success_reasons.append(f"连续天数从{pre_continuous_days}→{post_continuous_days}")
+            if post_continuous_days > pre_continuous_days:
+                success_reasons.append(f"连续天数从{pre_continuous_days}→{post_continuous_days}（已增加）")
             if post_money > pre_money:
                 success_reasons.append(f"药丸数量从{pre_money}→{post_money}（奖励到账）")
             success_msg = f"✅ 真实签到成功！\n📅 连续签到：{post_continuous_days}天\n💰 剩余药丸：{post_money}个\n⏰ 签到时间：{checkin_time}\n🔍 校验依据：{'; '.join(success_reasons)}"
@@ -202,14 +217,12 @@ def main():
     session = None
     cookie_valid = False
 
-    # 步骤1：Cookie登录
+    # 步骤1：Cookie登录（使用完整Cookie）
     if invites_cookie:
-        flarum_remember = extract_cookie_value(invites_cookie, "flarum_remember")
-        if flarum_remember:
-            print("=== 尝试使用Cookie登录 ===")
-            session, cookie_valid = refresh_session(flarum_remember)
-        else:
-            print("Cookie格式错误：未提取到flarum_remember")
+        print("=== 尝试使用Cookie登录 ===")
+        session, cookie_valid = refresh_session(invites_cookie)
+    else:
+        print("未配置INVITES_COOKIE环境变量")
 
     # 步骤2：Cookie失效则账号密码登录
     if not cookie_valid and invites_username and invites_password:
@@ -235,5 +248,5 @@ def main():
         print(error_msg)
 
 if __name__ == "__main__":
-    print("=== 药丸论坛签到脚本（最终精准版）===")
+    print("=== 药丸论坛签到脚本（抓包匹配终极版）===")
     main()
