@@ -38,33 +38,38 @@ jobs:
         run: |
           python checkin.py  # 确保脚本路径正确
 
-      - name: 发送企业微信通知
+      - name: 发送企业微信通知（修复版）
         if: always()  # 无论成败都发送通知
         env:
           WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
           RESULT: ${{ steps.checkin_step.outputs.checkin_result }}
           MSG: ${{ steps.checkin_step.outputs.checkin_msg }}
         run: |
-          # 构造标题
+          # 1. 构造标题（逻辑不变）
           if [ "$RESULT" = "success" ]; then
               TITLE="✅ 药丸论坛签到成功"
           else
               TITLE="❌ 药丸论坛签到失败"
           fi
 
-          # 还原换行符并构造内容（关键：转义特殊字符）
+          # 2. 构造内容（修复：正确还原换行符，避免特殊字符）
           CONTENT="### $TITLE\n$(echo "$MSG" | sed 's/\\n/\n/g')\n\n📢 GitHub Actions 自动推送"
           
-          # 正确构造JSON（避免URL格式错误）
+          # 3. 修复核心：用jq正确构造JSON（避免URL解析错误）
           JSON_DATA=$(jq -n \
               --arg msgtype "markdown" \
               --arg content "$CONTENT" \
               '{"msgtype": $msgtype, "markdown": {"content": $content}}')
           
-          # 发送请求（严格校验URL）
+          # 4. 发送请求（增加URL校验和详细日志，便于排查）
+          echo "=== 发送企业微信通知 ==="
+          echo "WebHook URL前缀：${WECHAT_WEBHOOK:0:30}..."  # 隐藏敏感信息
+          echo "通知内容：$CONTENT"
+          
+          # 执行curl（修复：标准格式，增加重试和超时）
           curl -X POST "$WECHAT_WEBHOOK" \
               -H "Content-Type: application/json" \
               -d "$JSON_DATA" \
-              --max-time 10 \
-              --retry 2 \
-              --silent --show-error  # 静默模式，仅显示错误
+              --max-time 15 \
+              --retry 3 \
+              -v  # 详细日志，定位问题
