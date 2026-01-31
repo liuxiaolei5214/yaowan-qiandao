@@ -1,77 +1,70 @@
 name: 药丸论坛自动签到
 
-# 触发规则：每天凌晨0点30分（UTC+8）+ 手动触发
 on:
   schedule:
-    - cron: '30 16 * * *'  # UTC 16:30 = 北京时间 00:30
-  workflow_dispatch:
+    - cron: '30 16 * * *'  # 北京时间每天00:30执行
+  workflow_dispatch:  # 手动触发
 
-# 作业配置
 jobs:
-  checkin_job:
+  checkin:
     runs-on: ubuntu-latest
-    timeout-minutes: 10  # 超时时间（避免卡死）
+    timeout-minutes: 10
     steps:
-      # 步骤1：检出仓库代码
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 步骤2：设置Python环境
-      - name: 配置Python 3.10环境
+      - name: 配置Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-          cache: 'pip'  # 缓存pip依赖，加速运行
+          cache: 'pip'  # 启用pip缓存（依赖requirements.txt）
 
-      # 步骤3：安装依赖
-      - name: 安装Python依赖和jq工具
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install -r requirements.txt  # 从依赖文件安装
           sudo apt-get update && sudo apt-get install -y jq
 
-      # 步骤4：记录触发时间
-      - name: 打印触发时间
+      - name: 打印执行时间
         run: |
-          echo "脚本触发时间（北京时间）：$(date -d '+8 hour' '+%Y-%m-%d %H:%M:%S')"
+          echo "执行时间（北京时间）：$(date -d '+8 hour' '+%Y-%m-%d %H:%M:%S')"
 
-      # 步骤5：执行签到脚本
-      - name: 运行签到脚本
+      - name: 执行签到脚本
         id: checkin_step
         env:
           INVITES_COOKIE: ${{ secrets.INVITES_COOKIE }}
           INVITES_USERNAME: ${{ secrets.INVITES_USERNAME }}
           INVITES_PASSWORD: ${{ secrets.INVITES_PASSWORD }}
         run: |
-          python checkin.py
+          python checkin.py  # 确保脚本路径正确
 
-      # 步骤6：发送企业微信通知
-      - name: 推送企业微信通知
-        if: always()  # 无论签到成功/失败，都发送通知
+      - name: 发送企业微信通知
+        if: always()  # 无论成败都发送通知
         env:
           WECHAT_WEBHOOK: ${{ secrets.WECHAT_WEBHOOK }}
-          CHECKIN_RESULT: ${{ steps.checkin_step.outputs.checkin_result }}
-          CHECKIN_MSG: ${{ steps.checkin_step.outputs.checkin_msg }}
+          RESULT: ${{ steps.checkin_step.outputs.checkin_result }}
+          MSG: ${{ steps.checkin_step.outputs.checkin_msg }}
         run: |
-          # 构造通知标题
-          if [ "$CHECKIN_RESULT" = "success" ]; then
+          # 构造标题
+          if [ "$RESULT" = "success" ]; then
               TITLE="✅ 药丸论坛签到成功"
           else
               TITLE="❌ 药丸论坛签到失败"
           fi
+
+          # 还原换行符并构造内容（关键：转义特殊字符）
+          CONTENT="### $TITLE\n$(echo "$MSG" | sed 's/\\n/\n/g')\n\n📢 GitHub Actions 自动推送"
           
-          # 还原换行符并构造内容
-          CONTENT="### $TITLE\n$(echo "$CHECKIN_MSG" | sed 's/\\n/\n/g')\n\n📢 GitHub Actions 自动推送"
-          
-          # 构造JSON并发送请求
+          # 正确构造JSON（避免URL格式错误）
           JSON_DATA=$(jq -n \
               --arg msgtype "markdown" \
               --arg content "$CONTENT" \
               '{"msgtype": $msgtype, "markdown": {"content": $content}}')
           
-          # 发送通知（添加超时和重试）
+          # 发送请求（严格校验URL）
           curl -X POST "$WECHAT_WEBHOOK" \
               -H "Content-Type: application/json" \
               -d "$JSON_DATA" \
               --max-time 10 \
-              --retry 2
+              --retry 2 \
+              --silent --show-error  # 静默模式，仅显示错误
