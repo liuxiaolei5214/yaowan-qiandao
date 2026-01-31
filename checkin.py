@@ -4,9 +4,9 @@ import os
 from datetime import datetime
 from datetime import timezone
 
-# 配置（已适配新版接口，需替换USER_ID为你自己的）
+# 核心配置（必须替换为自己的信息）
 BASE_URL = "https://invites.fun"
-USER_ID = 304  # 替换为你的实际UserID（从网页URL/抓包获取，比如你的URL是11524）
+USER_ID = 304  # 你的真实用户ID（从网页URL/抓包获取，必填）
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     "Referer": BASE_URL,
@@ -16,8 +16,7 @@ HEADERS = {
 }
 
 def set_github_output(name, value):
-    """GitHub Actions 输出方式（修复格式错误，转义特殊字符）"""
-    # 转义换行符、单双引号，避免GitHub识别格式错误
+    """GitHub Actions 输出（修复格式错误，转义特殊字符）"""
     value = value.replace("\n", "\\n").replace("'", "").replace('"', '')
     if "GITHUB_OUTPUT" in os.environ:
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
@@ -26,25 +25,25 @@ def set_github_output(name, value):
         print(f"[DEBUG] {name}={value}")  # 本地调试用
 
 def extract_cookie_value(cookie_str, key):
-    """从Cookie字符串中提取指定键的值"""
+    """从Cookie字符串提取指定键的值"""
     pattern = re.compile(rf"{key}=([^;]+)")
     match = pattern.search(cookie_str)
     return match.group(1) if match else None
 
 def get_latest_csrf_token(session):
-    """动态获取最新CSRF Token（优先响应头，兜底HTML）"""
+    """动态获取CSRF Token（多方式兜底）"""
     try:
         resp = session.get(BASE_URL, headers=HEADERS)
         resp.raise_for_status()
-        # 方式1：从响应头获取（Flarum 优先推荐）
+        # 方式1：响应头（优先）
         csrf_token = resp.headers.get("X-Csrf-Token")
         if csrf_token:
             return csrf_token
-        # 方式2：从HTML元标签提取（兜底）
+        # 方式2：HTML元标签
         csrf_token = re.search(r'<meta name="csrf-token" content="([^"]+)">', resp.text)
         if csrf_token:
             return csrf_token.group(1)
-        # 方式3：从JS变量提取（终极兜底）
+        # 方式3：JS变量
         csrf_token = re.search(r'X-Csrf-Token": "([^"]+)"', resp.text)
         return csrf_token.group(1) if csrf_token else None
     except Exception as e:
@@ -54,9 +53,7 @@ def get_latest_csrf_token(session):
 def refresh_session(flarum_remember):
     """用Cookie刷新会话并获取CSRF Token"""
     session = requests.Session()
-    # 设置Cookie
     session.cookies.set("flarum_remember", flarum_remember, domain="invites.fun", path="/")
-    # 获取最新CSRF Token
     csrf_token = get_latest_csrf_token(session)
     if csrf_token:
         session.headers["X-Csrf-Token"] = csrf_token
@@ -70,7 +67,7 @@ def login(username, password):
     """账号密码登录（动态CSRF Token）"""
     session = requests.Session()
     try:
-        # 1. 获取登录页CSRF Token
+        # 获取登录页CSRF Token
         login_page_resp = session.get(f"{BASE_URL}/login", headers=HEADERS)
         login_page_resp.raise_for_status()
         csrf_token = re.search(r'name="csrfToken" value="([^"]+)"', login_page_resp.text)
@@ -79,7 +76,7 @@ def login(username, password):
             return None, None, None
         login_csrf = csrf_token.group(1)
 
-        # 2. 发送登录请求
+        # 发送登录请求
         login_data = {
             "csrfToken": login_csrf,
             "identification": username,
@@ -94,12 +91,11 @@ def login(username, password):
         )
         login_resp.raise_for_status()
 
-        # 3. 校验登录结果
+        # 校验登录结果
         flarum_remember = session.cookies.get("flarum_remember")
         flarum_session = session.cookies.get("flarum_session")
         if flarum_remember and flarum_session:
             print("登录成功，获取到有效Cookie")
-            # 登录后更新CSRF Token
             csrf_token = get_latest_csrf_token(session)
             if csrf_token:
                 session.headers["X-Csrf-Token"] = csrf_token
@@ -112,13 +108,11 @@ def login(username, password):
         return None, None, None
 
 def checkin(session):
-    """执行签到（修复405错误+精准判断签到是否成功）"""
-    # 初始化关键变量，避免未定义
+    """执行签到（精准判断真实签到状态）"""
     resp_text = ""
     checkin_resp = None
     try:
-        # 1. 记录签到前的连续天数（用于对比）
-        # 先获取签到前的用户信息
+        # 1. 获取签到前的基准数据（用于对比）
         pre_resp = session.get(f"{BASE_URL}/api/users/{USER_ID}", headers=session.headers)
         pre_resp.raise_for_status()
         pre_data = pre_resp.json()
@@ -135,80 +129,59 @@ def checkin(session):
             }
         }
 
-        # 3. 发送签到请求（核心修复：改用PATCH方法）
+        # 3. 发送PATCH签到请求（核心修复405错误）
         checkin_resp = session.patch(
             f"{BASE_URL}/api/users/{USER_ID}",
             json=checkin_data,
             headers=session.headers
         )
-        checkin_resp.raise_for_status()  # 非200状态码抛出异常
+        checkin_resp.raise_for_status()
         resp_text = checkin_resp.text
         resp_json = checkin_resp.json()
 
-        # 4. 提取签到后的数据
+        # 4. 提取签到后数据
         attributes = resp_json.get("data", {}).get("attributes", {})
         post_continuous_days = attributes.get("totalContinuousCheckIn", 0)
         post_money = attributes.get("money", 0)
         last_checkin_time = attributes.get("lastCheckinTime", "")
-        
-        # 5. 格式化签到时间（北京时间）
+
+        # 5. 格式化时间并校验是否为当天
         checkin_date = ""
+        today = datetime.now().strftime("%Y-%m-%d")
         if last_checkin_time:
             utc_time = datetime.strptime(last_checkin_time, "%Y-%m-%d %H:%M:%S")
             beijing_time = utc_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
             checkin_time = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-            checkin_date = beijing_time.strftime("%Y-%m-%d")  # 仅日期，用于判断是否是当天
+            checkin_date = beijing_time.strftime("%Y-%m-%d")
         else:
             checkin_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            checkin_date = datetime.now().strftime("%Y-%m-%d")
+            checkin_date = today
 
-        # 6. 精准判断签到是否成功（多维度校验）
-        today = datetime.now().strftime("%Y-%m-%d")
-        # 校验条件：
-        # - 签到日期是今天
-        # - 连续天数增加 或 药丸数量增加 或 明确的签到成功标识
-        is_real_success = False
+        # 6. 多维度判定真实签到状态
+        is_real_success = checkin_date == today
         success_reasons = []
-        if checkin_date == today:
+        if is_real_success:
             success_reasons.append("签到日期为当天")
-            # 对比连续天数：签到后≥签到前（首次签到/断签后也会≥）
             if post_continuous_days >= pre_continuous_days:
                 success_reasons.append(f"连续天数从{pre_continuous_days}→{post_continuous_days}")
-            # 对比药丸数量：签到后>签到前（有奖励到账）
             if post_money > pre_money:
                 success_reasons.append(f"药丸数量从{pre_money}→{post_money}（奖励到账）")
-            # 额外校验：接口返回是否有签到成功的关键词
-            if "checkin" in resp_text.lower() and "success" in resp_text.lower():
-                success_reasons.append("接口返回包含成功标识")
-            # 满足核心条件（日期是今天）则判定成功
-            is_real_success = True
-        else:
-            success_reasons.append(f"签到日期{checkin_date}≠当天{today}")
-
-        # 7. 输出真实结果
-        if is_real_success:
             success_msg = f"✅ 真实签到成功！\n📅 连续签到：{post_continuous_days}天\n💰 剩余药丸：{post_money}个\n⏰ 签到时间：{checkin_time}\n🔍 校验依据：{'; '.join(success_reasons)}"
-            print(success_msg)
             set_github_output("checkin_result", "success")
             set_github_output("checkin_msg", success_msg)
+            print(success_msg)
             return True, success_msg
         else:
-            error_msg = f"❌ 伪成功！接口返回200但未实际签到\n📅 签到日期：{checkin_date}（当天应为{today}）\n🔍 校验依据：{'; '.join(success_reasons)}"
-            print(error_msg)
+            error_msg = f"❌ 伪成功！接口返回200但未实际签到\n📅 签到日期：{checkin_date}（当天应为{today}）\n🔍 校验依据：签到日期非当天"
             set_github_output("checkin_result", "failure")
             set_github_output("checkin_msg", error_msg)
+            print(error_msg)
             return False, error_msg
 
     except requests.exceptions.HTTPError as e:
-        # 处理接口HTTP错误
-        if checkin_resp:
-            error_msg = f"❌ 签到失败：接口返回{checkin_resp.status_code}错误\n响应内容：{resp_text[:200]}"
-        else:
-            error_msg = f"❌ 签到失败：HTTP请求错误\n错误详情：{str(e)}"
+        error_msg = f"❌ 签到失败：接口返回{checkin_resp.status_code if checkin_resp else '未知'}错误\n响应内容：{resp_text[:200]}"
     except Exception as e:
-        # 处理其他异常
         error_msg = f"❌ 签到异常：{str(e)}"
-        # 补充响应信息（如果有）
         if checkin_resp:
             error_msg += f"\n接口状态码：{checkin_resp.status_code}"
         if resp_text:
@@ -220,8 +193,8 @@ def checkin(session):
     return False, error_msg
 
 def main():
-    """主逻辑：Cookie优先 → 登录兜底 → 执行签到"""
-    # 从环境变量读取配置
+    """主逻辑：Cookie优先 → 账号密码兜底 → 执行签到"""
+    # 读取环境变量
     invites_cookie = os.getenv("INVITES_COOKIE", "")
     invites_username = os.getenv("INVITES_USERNAME", "")
     invites_password = os.getenv("INVITES_PASSWORD", "")
@@ -229,7 +202,7 @@ def main():
     session = None
     cookie_valid = False
 
-    # 步骤1：优先使用Cookie登录
+    # 步骤1：Cookie登录
     if invites_cookie:
         flarum_remember = extract_cookie_value(invites_cookie, "flarum_remember")
         if flarum_remember:
@@ -238,17 +211,17 @@ def main():
         else:
             print("Cookie格式错误：未提取到flarum_remember")
 
-    # 步骤2：Cookie失效则用账号密码登录
+    # 步骤2：Cookie失效则账号密码登录
     if not cookie_valid and invites_username and invites_password:
         print("=== Cookie失效，尝试账号密码登录 ===")
         session, _, _ = login(invites_username, invites_password)
-        # 登录成功后更新状态
         if session:
             cookie_valid = True
         else:
             error_msg = "❌ 登录失败，无法执行签到"
             set_github_output("checkin_result", "failure")
             set_github_output("checkin_msg", error_msg)
+            print(error_msg)
             return
 
     # 步骤3：执行签到
@@ -262,5 +235,5 @@ def main():
         print(error_msg)
 
 if __name__ == "__main__":
-    print("=== 药丸论坛签到脚本（GitHub版·精准校验版）===")
+    print("=== 药丸论坛签到脚本（最终精准版）===")
     main()
