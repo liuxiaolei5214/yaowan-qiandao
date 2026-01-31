@@ -6,7 +6,7 @@ from datetime import timezone
 
 # 配置（已适配新版接口，需替换USER_ID为你自己的）
 BASE_URL = "https://invites.fun"
-USER_ID = 11524  # 替换为你的实际UserID（从网页URL/抓包获取，比如你的URL是11524）
+USER_ID = 304  # 替换为你的实际UserID（从网页URL/抓包获取，比如你的URL是11524）
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     "Referer": BASE_URL,
