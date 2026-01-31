@@ -112,6 +112,9 @@ def login(username, password):
 
 def checkin(session):
     """执行签到（调用新版 /api/users/304 接口）"""
+    # 初始化关键变量，避免未定义
+    resp_text = ""
+    checkin_resp = None
     try:
         # 1. 构造签到请求体（与Cloudflare一致）
         checkin_data = {
@@ -156,11 +159,19 @@ def checkin(session):
         return True, success_msg
 
     except requests.exceptions.HTTPError as e:
-        # 处理接口HTTP错误
-        error_msg = f"❌ 签到失败：接口返回{checkin_resp.status_code}错误\n响应内容：{resp_text[:200]}"
+        # 处理接口HTTP错误（确保变量已定义）
+        if checkin_resp:
+            error_msg = f"❌ 签到失败：接口返回{checkin_resp.status_code}错误\n响应内容：{resp_text[:200]}"
+        else:
+            error_msg = f"❌ 签到失败：HTTP请求错误\n错误详情：{str(e)}"
     except Exception as e:
         # 处理其他异常
         error_msg = f"❌ 签到异常：{str(e)}"
+        # 补充响应信息（如果有）
+        if checkin_resp:
+            error_msg += f"\n接口状态码：{checkin_resp.status_code}"
+        if resp_text:
+            error_msg += f"\n响应内容：{resp_text[:200]}"
     
     print(error_msg)
     set_github_output("checkin_result", "failure")
@@ -190,14 +201,17 @@ def main():
     if not cookie_valid and invites_username and invites_password:
         print("=== Cookie失效，尝试账号密码登录 ===")
         session, _, _ = login(invites_username, invites_password)
-        if not session:
+        # 账号密码登录成功后，更新cookie_valid为True（原逻辑缺失）
+        if session:
+            cookie_valid = True
+        else:
             error_msg = "❌ 登录失败，无法执行签到"
             set_github_output("checkin_result", "failure")
             set_github_output("checkin_msg", error_msg)
             return
 
-    # 步骤3：执行签到
-    if session and cookie_valid:
+    # 步骤3：执行签到（修复逻辑：只要session存在就执行，不管cookie_valid）
+    if session:
         print("=== 开始执行签到 ===")
         checkin(session)
     else:
