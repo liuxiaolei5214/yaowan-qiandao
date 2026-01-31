@@ -6,14 +6,13 @@ from datetime import timezone
 
 # 配置（已适配新版接口，需替换USER_ID为你自己的）
 BASE_URL = "https://invites.fun"
-USER_ID = 304  # 替换为你的实际UserID（抓包/api/users/xxx可获取）
+USER_ID = 11524  # 替换为你的实际UserID（从网页URL/抓包获取，比如你的URL是11524）
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
     "Referer": BASE_URL,
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Content-Type": "application/json; charset=UTF-8",
-    # 移除伪PATCH请求头（导致405错误的核心原因）
 }
 
 def set_github_output(name, value):
@@ -113,12 +112,20 @@ def login(username, password):
         return None, None, None
 
 def checkin(session):
-    """执行签到（修复405错误：改用PATCH方法）"""
+    """执行签到（修复405错误+精准判断签到是否成功）"""
     # 初始化关键变量，避免未定义
     resp_text = ""
     checkin_resp = None
     try:
-        # 1. 构造签到请求体
+        # 1. 记录签到前的连续天数（用于对比）
+        # 先获取签到前的用户信息
+        pre_resp = session.get(f"{BASE_URL}/api/users/{USER_ID}", headers=session.headers)
+        pre_resp.raise_for_status()
+        pre_data = pre_resp.json()
+        pre_continuous_days = pre_data.get("data", {}).get("attributes", {}).get("totalContinuousCheckIn", 0)
+        pre_money = pre_data.get("data", {}).get("attributes", {}).get("money", 0)
+
+        # 2. 构造签到请求体
         checkin_data = {
             "data": {
                 "attributes": {
@@ -128,7 +135,7 @@ def checkin(session):
             }
         }
 
-        # 2. 发送签到请求（核心修复：改用PATCH方法）
+        # 3. 发送签到请求（核心修复：改用PATCH方法）
         checkin_resp = session.patch(
             f"{BASE_URL}/api/users/{USER_ID}",
             json=checkin_data,
@@ -138,26 +145,59 @@ def checkin(session):
         resp_text = checkin_resp.text
         resp_json = checkin_resp.json()
 
-        # 3. 提取核心签到信息
+        # 4. 提取签到后的数据
         attributes = resp_json.get("data", {}).get("attributes", {})
-        continuous_days = attributes.get("totalContinuousCheckIn", 0)
-        remaining_money = attributes.get("money", 0)
+        post_continuous_days = attributes.get("totalContinuousCheckIn", 0)
+        post_money = attributes.get("money", 0)
         last_checkin_time = attributes.get("lastCheckinTime", "")
         
-        # 格式化签到时间（北京时间）
+        # 5. 格式化签到时间（北京时间）
+        checkin_date = ""
         if last_checkin_time:
             utc_time = datetime.strptime(last_checkin_time, "%Y-%m-%d %H:%M:%S")
             beijing_time = utc_time.replace(tzinfo=timezone.utc).astimezone(tz=None)
             checkin_time = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+            checkin_date = beijing_time.strftime("%Y-%m-%d")  # 仅日期，用于判断是否是当天
         else:
             checkin_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            checkin_date = datetime.now().strftime("%Y-%m-%d")
 
-        # 4. 输出结果
-        success_msg = f"✅ 签到成功！\n📅 连续签到：{continuous_days}天\n💰 剩余药丸：{remaining_money}个\n⏰ 签到时间：{checkin_time}"
-        print(success_msg)
-        set_github_output("checkin_result", "success")
-        set_github_output("checkin_msg", success_msg)
-        return True, success_msg
+        # 6. 精准判断签到是否成功（多维度校验）
+        today = datetime.now().strftime("%Y-%m-%d")
+        # 校验条件：
+        # - 签到日期是今天
+        # - 连续天数增加 或 药丸数量增加 或 明确的签到成功标识
+        is_real_success = False
+        success_reasons = []
+        if checkin_date == today:
+            success_reasons.append("签到日期为当天")
+            # 对比连续天数：签到后≥签到前（首次签到/断签后也会≥）
+            if post_continuous_days >= pre_continuous_days:
+                success_reasons.append(f"连续天数从{pre_continuous_days}→{post_continuous_days}")
+            # 对比药丸数量：签到后>签到前（有奖励到账）
+            if post_money > pre_money:
+                success_reasons.append(f"药丸数量从{pre_money}→{post_money}（奖励到账）")
+            # 额外校验：接口返回是否有签到成功的关键词
+            if "checkin" in resp_text.lower() and "success" in resp_text.lower():
+                success_reasons.append("接口返回包含成功标识")
+            # 满足核心条件（日期是今天）则判定成功
+            is_real_success = True
+        else:
+            success_reasons.append(f"签到日期{checkin_date}≠当天{today}")
+
+        # 7. 输出真实结果
+        if is_real_success:
+            success_msg = f"✅ 真实签到成功！\n📅 连续签到：{post_continuous_days}天\n💰 剩余药丸：{post_money}个\n⏰ 签到时间：{checkin_time}\n🔍 校验依据：{'; '.join(success_reasons)}"
+            print(success_msg)
+            set_github_output("checkin_result", "success")
+            set_github_output("checkin_msg", success_msg)
+            return True, success_msg
+        else:
+            error_msg = f"❌ 伪成功！接口返回200但未实际签到\n📅 签到日期：{checkin_date}（当天应为{today}）\n🔍 校验依据：{'; '.join(success_reasons)}"
+            print(error_msg)
+            set_github_output("checkin_result", "failure")
+            set_github_output("checkin_msg", error_msg)
+            return False, error_msg
 
     except requests.exceptions.HTTPError as e:
         # 处理接口HTTP错误
@@ -222,5 +262,5 @@ def main():
         print(error_msg)
 
 if __name__ == "__main__":
-    print("=== 药丸论坛签到脚本（GitHub版·修复版）===")
+    print("=== 药丸论坛签到脚本（GitHub版·精准校验版）===")
     main()
